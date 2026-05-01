@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Neuro-Evolutionary Simulator — Phase 5</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0f;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #aaa;
+    }
+
+    header { margin-bottom: 12px; text-align: center; }
+
+    header h1 {
+      font-size: 1rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: #3dff8f;
+      opacity: 0.85;
+    }
+
+    header p {
+      font-size: 0.65rem;
+      letter-spacing: 0.15em;
+      color: #555;
+      margin-top: 3px;
+    }
+
+    /* Canvas sits in a wrapper so the brain-viewer canvas can overlay it */
+    #canvas-wrap {
+      position: relative;
+      line-height: 0;
+    }
+
+    #sim-canvas {
+      display: block;
+      border: 1px solid #1e1e2e;
+      box-shadow: 0 0 40px rgba(61, 255, 143, 0.07);
+      cursor: crosshair;
+    }
+
+    /* Brain viewer overlay — bottom-right corner of the sim canvas */
+    #brain-canvas {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      pointer-events: none;   /* clicks pass through to sim canvas */
+      border: 1px solid #1e1e2e;
+      background: rgba(5, 5, 8, 0.88);
+      border-radius: 2px;
+      display: none;          /* hidden until a blob is selected */
+    }
+
+    /* HUD */
+    #hud {
+      margin-top: 10px;
+      display: flex;
+      gap: 24px;
+      font-size: 0.62rem;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+      color: #444;
+    }
+
+    #hud span        { color: #3dff8f; }
+    #hud .warn       { color: #ff9944; }   /* overpop warning colour */
+
+    /* Controls */
+    #controls {
+      margin-top: 10px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .ctrl-btn {
+      background: transparent;
+      border: 1px solid #2a2a3e;
+      color: #666;
+      font-family: 'Courier New', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 5px 14px;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
+    }
+
+    .ctrl-btn:hover {
+      border-color: #3dff8f;
+      color: #3dff8f;
+      box-shadow: 0 0 8px rgba(61, 255, 143, 0.18);
+    }
+
+    .ctrl-btn.active {
+      border-color: #3dff8f;
+      color: #0a0a0f;
+      background: #3dff8f;
+      box-shadow: 0 0 14px rgba(61, 255, 143, 0.35);
+    }
+
+    .ctrl-sep { width: 1px; height: 18px; background: #222; }
+
+    #hint {
+      margin-top: 6px;
+      font-size: 0.55rem;
+      letter-spacing: 0.1em;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Neuro-Evolutionary Simulator</h1>
+    <p>Phase 5 — Advanced Biology &amp; 2D Awareness</p>
+  </header>
+
+  <div id="canvas-wrap">
+    <canvas id="sim-canvas"></canvas>
+    <!-- Brain viewer drawn here when a blob is selected -->
+    <canvas id="brain-canvas" width="210" height="220"></canvas>
+  </div>
+
+  <div id="hud">
+    <div>Gen: <span id="hud-gen">1</span></div>
+    <div>🟢 Prey: <span id="hud-prey">0</span></div>
+    <div>🔴 Pred: <span id="hud-pred">0</span></div>
+    <div>Total: <span id="hud-total">0</span></div>
+    <div>Food: <span id="hud-food">0</span></div>
+    <div>Scarcity: <span id="hud-scarcity" class="warn">OFF</span></div>
+    <div>Best↑: <span id="hud-best">0/0</span></div>
+    <div>Frame: <span id="hud-frame">0</span></div>
+  </div>
+
+  <div id="controls">
+    <button class="ctrl-btn" id="btn-skip">⏭ Skip Gen</button>
+    <div class="ctrl-sep"></div>
+    <button class="ctrl-btn" id="btn-turbo-2x"  data-turbo="2">2×</button>
+    <button class="ctrl-btn" id="btn-turbo-5x"  data-turbo="5">5×</button>
+    <button class="ctrl-btn" id="btn-turbo-20x" data-turbo="20">20×</button>
+  </div>
+  <div id="hint">click any blob to inspect its brain · click empty space to deselect</div>
+
+<script>
+// ╔══════════════════════════════════════════════════════════════╗
+//  CONFIGURATION — all tuneable constants in one place
+// ╚══════════════════════════════════════════════════════════════╝
+const CONFIG = {
+  WORLD_WIDTH:          900,
+  WORLD_HEIGHT:         600,
+
+  // ── Shared ────────────────────────────────────────────────
+  BLOB_SPEED:           1.8,
+  BLOB_START_ENERGY:    100,
+
+  // ── Prey ──────────────────────────────────────────────────
+  INITIAL_PREY:         30,
+  PREY_RADIUS:          7,
+  PREY_ENERGY_DECAY:    0.2,
+  PREY_ENERGY_GAIN:     20,
+
+  // ── Predator ──────────────────────────────────────────────
+  INITIAL_PREDATORS:    5,
+  PRED_RADIUS:          10,
+  PRED_ENERGY_DECAY:    0.35,
+  PRED_ENERGY_GAIN:     40,
+
+  // ── Food ──────────────────────────────────────────────────
+  INITIAL_FOOD:         50,
+  FOOD_RADIUS:          4,
+
+  // ── Neural Network ────────────────────────────────────────
+  // 9 inputs → 12 hidden → 2 outputs  (Phase 5 upgrade from 7→10→2)
+  NN_INPUTS:            9,
+  NN_HIDDEN:            12,
+  NN_OUTPUTS:           2,
+
+  // ── Genetic Algorithm ─────────────────────────────────────
+  FITNESS_EAT:          10,
+  FITNESS_SURVIVE:      0.1,
+  ELITE_RATIO:          0.20,
+  MUTATION_RATE:        0.10,
+  MUTATION_STRENGTH:    0.10,
+
+  // ── Dynamic Population Cap (Phase 5) ──────────────────────
+  // When total population exceeds this, a global scarcity
+  // multiplier is applied to every blob's energy decay.
+  POP_CAP:              100,
+  SCARCITY_MULTIPLIER:  2.5,    // decay is multiplied by this when over cap
+};
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  CANVAS SETUP
+// ╚══════════════════════════════════════════════════════════════╝
+const canvas    = document.getElementById('sim-canvas');
+const ctx       = canvas.getContext('2d');
+canvas.width    = CONFIG.WORLD_WIDTH;
+canvas.height   = CONFIG.WORLD_HEIGHT;
+
+const brainCvs  = document.getElementById('brain-canvas');
+const bctx      = brainCvs.getContext('2d');
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  UTILITY HELPERS
+// ╚══════════════════════════════════════════════════════════════╝
+
+/** Random float in [min, max). */
+function rand(min, max) { return Math.random() * (max - min) + min; }
+
+/** Random position safely inside canvas for a circle of `radius`. */
+function randomPosition(radius) {
+  return {
+    x: rand(radius, CONFIG.WORLD_WIDTH  - radius),
+    y: rand(radius, CONFIG.WORLD_HEIGHT - radius),
+  };
+}
+
+/** Unit vector in a random direction. */
+function randomDirection() {
+  const angle = rand(0, Math.PI * 2);
+  return { vx: Math.cos(angle), vy: Math.sin(angle) };
+}
+
+/** Euclidean distance between two {x,y} objects. */
+function distance(a, b) {
+  const dx = a.x - b.x, dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  NEURAL NETWORK MATH
+// ╚══════════════════════════════════════════════════════════════╝
+
+/** Tanh activation — maps any real to (-1, 1). */
+const tanh = x => Math.tanh(x);
+
+/**
+ * Matrix-vector multiply.
+ * weights[i][j] × input[j], summed over j, for each row i.
+ * Returns a new vector of length = weights.length (rows).
+ */
+function matMul(weights, input) {
+  return weights.map(row => row.reduce((s, w, j) => s + w * input[j], 0));
+}
+
+/** Allocate a [rows × cols] matrix of uniform-random weights in (-1,1). */
+function randomMatrix(rows, cols) {
+  return Array.from({ length: rows }, () =>
+    Array.from({ length: cols }, () => rand(-1, 1))
+  );
+}
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  FOOD CLASS
+// ╚══════════════════════════════════════════════════════════════╝
+class Food {
+  constructor() { this.radius = CONFIG.FOOD_RADIUS; this.respawn(); }
+
+  respawn() {
+    const p = randomPosition(this.radius);
+    this.x = p.x; this.y = p.y;
+  }
+
+  draw() {
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fillStyle  = '#1aff6e';
+    ctx.shadowColor = '#1aff6e';
+    ctx.shadowBlur  = 6;
+    ctx.fill();
+    ctx.shadowBlur  = 0;
+  }
+}
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  BLOB CLASS
+// ╚══════════════════════════════════════════════════════════════╝
+class Blob {
+  /**
+   * @param {number}            x, y    – spawn position
+   * @param {number}            vx, vy  – initial velocity (unit vec)
+   * @param {'prey'|'predator'} type
+   * @param {object|null}       brain   – pre-built brain or null → random
+   */
+  constructor(x, y, vx, vy, type = 'prey', brain = null) {
+    this.x    = x;  this.y  = y;
+    this.vx   = vx; this.vy = vy;
+    this.type = type;
+
+    // Species-specific physical constants
+    this.radius      = type === 'predator' ? CONFIG.PRED_RADIUS      : CONFIG.PREY_RADIUS;
+    this.energyDecay = type === 'predator' ? CONFIG.PRED_ENERGY_DECAY : CONFIG.PREY_ENERGY_DECAY;
+    this.energy      = CONFIG.BLOB_START_ENERGY;
+    this.fitness     = 0;
+    this.alive       = true;
+
+    // ── Neural Brain ──────────────────────────────────────────
+    // Architecture: 9 inputs → 12 hidden → 2 outputs
+    //
+    //   weights1: [NN_HIDDEN  × NN_INPUTS]  = [12 × 9]
+    //   weights2: [NN_OUTPUTS × NN_HIDDEN]  = [ 2 × 12]
+    //
+    // If brain is provided (reproduction), use it; else randomise.
+    this.brain = brain ?? {
+      weights1: randomMatrix(CONFIG.NN_HIDDEN,  CONFIG.NN_INPUTS),
+      weights2: randomMatrix(CONFIG.NN_OUTPUTS, CONFIG.NN_HIDDEN),
+    };
+
+    // Activity: magnitude of last output vector (0–1), used for glow.
+    this.activity = 0;
+
+    // Cache the last raw hidden activations for the brain viewer.
+    // Length = NN_HIDDEN.  Updated every think() call.
+    this._lastHidden  = new Array(CONFIG.NN_HIDDEN).fill(0);
+    this._lastOutputs = [0, 0];
+  }
+
+  // ────────────────────────────────────────────────────────────
+  //  think() — 9-input forward pass  (Phase 5 upgrade)
+  //
+  //  Full input vector layout:
+  //   [0] foodDistX   – signed X to nearest food / WORLD_WIDTH*0.5
+  //   [1] foodDistY   – signed Y to nearest food / WORLD_HEIGHT*0.5
+  //   [2] normEnergy  – energy / (START_ENERGY * 2)
+  //   [3] vx          – current X velocity (already in (-1,1))
+  //   [4] vy          – current Y velocity
+  //   [5] predDistX   – signed X to nearest predator, normalised
+  //   [6] predDistY   – signed Y to nearest predator, normalised
+  //   [7] preyDistX   – signed X to nearest prey, normalised
+  //   [8] preyDistY   – signed Y to nearest prey, normalised
+  //
+  //  Phase 4 used scalar (1-D) signals for predator/prey;
+  //  Phase 5 upgrades these to full 2D vectors (2 inputs each),
+  //  giving the network richer spatial awareness and enabling
+  //  proper approach/flee trajectories.
+  // ────────────────────────────────────────────────────────────
+  think() {
+    const hw = CONFIG.WORLD_WIDTH  / 2;
+    const hh = CONFIG.WORLD_HEIGHT / 2;
+
+    // ── [0,1] Nearest food ────────────────────────────────────
+    let foodDistX = 0, foodDistY = 0;
+    if (this.type === 'prey' && food.length > 0) {
+      let nearestD = Infinity;
+      for (const f of food) {
+        const d = distance(this, f);
+        if (d < nearestD) {
+          nearestD  = d;
+          foodDistX = (f.x - this.x) / hw;
+          foodDistY = (f.y - this.y) / hh;
+        }
+      }
+      foodDistX = Math.max(-1, Math.min(1, foodDistX));
+      foodDistY = Math.max(-1, Math.min(1, foodDistY));
+    }
+
+    // ── [2] Normalised energy ─────────────────────────────────
+    const normEnergy = this.energy / (CONFIG.BLOB_START_ENERGY * 2);
+
+    // ── [5,6] Full 2D vector to nearest PREDATOR ──────────────
+    // ── [7,8] Full 2D vector to nearest PREY ──────────────────
+    //
+    // Both species receive both signals:
+    //   Prey    → flee predator (inputs [5,6]), ignore prey (inputs [7,8])
+    //   Predator→ ignore predator (inputs [5,6]), chase prey (inputs [7,8])
+    //
+    // The network can learn to weight these differently per species
+    // because the two populations evolve separate weight matrices.
+    let predDistX = 0, predDistY = 0;
+    let preyDistX = 0, preyDistY = 0;
+    let nearPredD = Infinity, nearPreyD = Infinity;
+
+    for (const b of blobs) {
+      if (b === this || !b.alive) continue;
+      const d = distance(this, b);
+      if (b.type === 'predator' && d < nearPredD) {
+        nearPredD  = d;
+        predDistX  = (b.x - this.x) / hw;
+        predDistY  = (b.y - this.y) / hh;
+      }
+      if (b.type === 'prey' && d < nearPreyD) {
+        nearPreyD  = d;
+        preyDistX  = (b.x - this.x) / hw;
+        preyDistY  = (b.y - this.y) / hh;
+      }
+    }
+    // Clamp to (-1, 1) — very close neighbours produce large raw values
+    predDistX = Math.max(-1, Math.min(1, predDistX));
+    predDistY = Math.max(-1, Math.min(1, predDistY));
+    preyDistX = Math.max(-1, Math.min(1, preyDistX));
+    preyDistY = Math.max(-1, Math.min(1, preyDistY));
+
+    // ── Assemble 9-element input vector ───────────────────────
+    const inputs = [
+      foodDistX,  // [0]
+      foodDistY,  // [1]
+      normEnergy, // [2]
+      this.vx,    // [3]
+      this.vy,    // [4]
+      predDistX,  // [5]
+      predDistY,  // [6]
+      preyDistX,  // [7]
+      preyDistY,  // [8]
+    ];
+
+    // ── Forward pass ──────────────────────────────────────────
+    const hidden  = matMul(this.brain.weights1, inputs).map(tanh);
+    const outputs = matMul(this.brain.weights2, hidden).map(tanh);
+
+    this.vx = outputs[0];
+    this.vy = outputs[1];
+
+    // Cache for brain viewer and activity glow
+    this._lastHidden  = hidden;
+    this._lastOutputs = outputs;
+    this.activity     = Math.sqrt(outputs[0] ** 2 + outputs[1] ** 2) / Math.SQRT2;
+  }
+
+  // ────────────────────────────────────────────────────────────
+  //  move() — advance by velocity, bounce off walls
+  // ────────────────────────────────────────────────────────────
+  move() {
+    this.x += this.vx * CONFIG.BLOB_SPEED;
+    this.y += this.vy * CONFIG.BLOB_SPEED;
+
+    if (this.x - this.radius < 0) {
+      this.x = this.radius; this.vx = Math.abs(this.vx);
+    } else if (this.x + this.radius > CONFIG.WORLD_WIDTH) {
+      this.x = CONFIG.WORLD_WIDTH - this.radius; this.vx = -Math.abs(this.vx);
+    }
+    if (this.y - this.radius < 0) {
+      this.y = this.radius; this.vy = Math.abs(this.vy);
+    } else if (this.y + this.radius > CONFIG.WORLD_HEIGHT) {
+      this.y = CONFIG.WORLD_HEIGHT - this.radius; this.vy = -Math.abs(this.vy);
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────
+  //  draw()
+  //
+  //  Prey:     blue-white (idle) → warm amber (active)
+  //  Predator: dark crimson (idle) → bright orange-red (hunting)
+  //  Selected: extra bright ring
+  // ────────────────────────────────────────────────────────────
+  draw() {
+    const alpha = Math.max(0.15, this.energy / (CONFIG.BLOB_START_ENERGY * 2));
+    const act   = this.activity;
+    let r, g, b;
+
+    if (this.type === 'prey') {
+      r = Math.round(180 + act * 75);
+      g = Math.round(210 - act * 70);
+      b = Math.round(255 - act * 200);
+    } else {
+      r = Math.round(180 + act * 75);
+      g = Math.round(20  + act * 80);
+      b = Math.round(20  - act * 10);
+    }
+
+    const fill = `rgba(${r},${g},${b},${alpha})`;
+    const glow = `rgba(${r},${g},${b},${alpha * 0.4})`;
+
+    // Outer glow ring
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius + (this.type === 'predator' ? 6 : 4), 0, Math.PI * 2);
+    ctx.fillStyle   = glow;
+    ctx.shadowColor = glow;
+    ctx.shadowBlur  = (this.type === 'predator' ? 20 : 14) * act;
+    ctx.fill();
+    ctx.shadowBlur  = 0;
+
+    // Core body
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+
+    if (this.type === 'predator') {
+      ctx.strokeStyle = `rgba(255,60,60,${alpha * 0.6})`;
+      ctx.lineWidth   = 1.5;
+      ctx.stroke();
+    }
+
+    // Selection highlight ring
+    if (this === selectedBlob) {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.radius + 9, 0, Math.PI * 2);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth   = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+}
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  GENETIC ALGORITHM HELPERS
+// ╚══════════════════════════════════════════════════════════════╝
+
+/** Deep-clone a brain's weight matrices (prevents mutation aliasing). */
+function cloneBrain(brain) {
+  return {
+    weights1: brain.weights1.map(row => [...row]),
+    weights2: brain.weights2.map(row => [...row]),
+  };
+}
+
+/**
+ * mutate(brain) — returns a fresh brain with random weight nudges.
+ * Each weight independently has MUTATION_RATE chance of a ±MUTATION_STRENGTH shift.
+ */
+function mutate(brain) {
+  const child = cloneBrain(brain);
+  const mutM  = m => m.map(row =>
+    row.map(w => Math.random() < CONFIG.MUTATION_RATE
+      ? w + rand(-CONFIG.MUTATION_STRENGTH, CONFIG.MUTATION_STRENGTH)
+      : w)
+  );
+  child.weights1 = mutM(child.weights1);
+  child.weights2 = mutM(child.weights2);
+  return child;
+}
+
+/**
+ * crossover(brainA, brainB) — Sexual Reproduction (Phase 5)
+ *
+ * Creates a child brain by splitting each weight matrix at its midpoint row
+ * and taking the first half from Parent A and the second half from Parent B.
+ *
+ *   weights1 has NN_HIDDEN rows: rows 0..mid-1 from A, rows mid..end from B.
+ *   weights2 has NN_OUTPUTS rows: same split logic (2 rows → row 0 from A, row 1 from B).
+ *
+ * This is "uniform row crossover" — simple but effective. It ensures every
+ * child gets a blend of both parents' hidden-neuron tuning rather than
+ * just one parent's strategy with noise added.
+ *
+ * Mutation is applied AFTER crossover by the caller (evolveSpecies).
+ */
+function crossover(brainA, brainB) {
+  const child = { weights1: [], weights2: [] };
+
+  const splitRows = (mA, mB) => {
+    const mid = Math.floor(mA.length / 2);
+    return [
+      ...mA.slice(0, mid).map(row => [...row]),  // rows 0..mid-1 from Parent A
+      ...mB.slice(mid).map(row => [...row]),     // rows mid..end from Parent B
+    ];
+  };
+
+  child.weights1 = splitRows(brainA.weights1, brainB.weights1);
+  child.weights2 = splitRows(brainA.weights2, brainB.weights2);
+  return child;
+}
+
+/**
+ * evolveSpecies(pool, type, count) — GA pipeline for ONE species.
+ *
+ * Steps:
+ *   1. Sort pool by fitness descending.
+ *   2. Keep top ELITE_RATIO% as parents (≥1 always).
+ *   3. For each child: pick TWO distinct random elites, crossover, then mutate.
+ *   4. Return array of new Blob objects.
+ *
+ * If pool is empty (extinction), spawns fresh random blobs so the sim never
+ * permanently loses a species.
+ */
+function evolveSpecies(pool, type, count) {
+  const children = [];
+
+  if (pool.length === 0) {
+    // Extinction recovery — re-seed with random brains
+    for (let i = 0; i < count; i++) {
+      const pos = randomPosition(type === 'predator' ? CONFIG.PRED_RADIUS : CONFIG.PREY_RADIUS);
+      const dir = randomDirection();
+      children.push(new Blob(pos.x, pos.y, dir.vx, dir.vy, type));
+    }
+    return children;
+  }
+
+  // Sort best-first and isolate elites
+  pool.sort((a, b) => b.fitness - a.fitness);
+  const eliteCount = Math.max(1, Math.floor(pool.length * CONFIG.ELITE_RATIO));
+  const elites     = pool.slice(0, eliteCount);
+
+  for (let i = 0; i < count; i++) {
+    const pos = randomPosition(type === 'predator' ? CONFIG.PRED_RADIUS : CONFIG.PREY_RADIUS);
+    const dir = randomDirection();
+
+    let childBrain;
+    if (elites.length === 1) {
+      // Only one elite available — skip crossover, just mutate
+      childBrain = mutate(elites[0].brain);
+    } else {
+      // Pick two DISTINCT random elite parents
+      const idxA = Math.floor(Math.random() * elites.length);
+      let   idxB = Math.floor(Math.random() * (elites.length - 1));
+      if (idxB >= idxA) idxB++;   // ensure idxB ≠ idxA
+
+      const parentA = elites[idxA].brain;
+      const parentB = elites[idxB].brain;
+
+      // Crossover then mutate
+      childBrain = mutate(crossover(parentA, parentB));
+    }
+
+    children.push(new Blob(pos.x, pos.y, dir.vx, dir.vy, type, childBrain));
+  }
+
+  return children;
+}
+
+/**
+ * evolve() — called when every blob is dead.
+ * Splits deadPool by species, runs evolveSpecies for each,
+ * merges back into `blobs`, respawns food, resets counters.
+ */
+function evolve() {
+  const preyPool = deadPool.filter(e => e.type === 'prey');
+  const predPool = deadPool.filter(e => e.type === 'predator');
+
+  // Track all-time bests for the HUD
+  preyPool.sort((a, b) => b.fitness - a.fitness);
+  predPool.sort((a, b) => b.fitness - a.fitness);
+  if (preyPool.length > 0) allTimeBestPrey = Math.max(allTimeBestPrey, preyPool[0].fitness);
+  if (predPool.length > 0) allTimeBestPred = Math.max(allTimeBestPred, predPool[0].fitness);
+
+  blobs = [
+    ...evolveSpecies(preyPool, 'prey',      CONFIG.INITIAL_PREY),
+    ...evolveSpecies(predPool, 'predator',  CONFIG.INITIAL_PREDATORS),
+  ];
+
+  for (const f of food) f.respawn();
+  deadPool.length = 0;
+  generation++;
+  flashTimer      = 90;
+  selectedBlob    = null;   // clear selection across generation boundary
+  scarcityActive  = false;  // reset scarcity flag; update() will re-evaluate
+}
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  WORLD STATE
+// ╚══════════════════════════════════════════════════════════════╝
+let blobs           = [];
+let food            = [];
+let deadPool        = [];
+let frame           = 0;
+let generation      = 1;
+let allTimeBestPrey = 0;
+let allTimeBestPred = 0;
+let flashTimer      = 0;
+let turboMultiplier = 1;
+let selectedBlob    = null;   // blob currently shown in brain viewer
+let scarcityActive  = false;  // true when total pop > POP_CAP
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  INITIALISE WORLD
+// ╚══════════════════════════════════════════════════════════════╝
+function initWorld() {
+  for (let i = 0; i < CONFIG.INITIAL_FOOD; i++)        food.push(new Food());
+  for (let i = 0; i < CONFIG.INITIAL_PREY; i++) {
+    const p = randomPosition(CONFIG.PREY_RADIUS), d = randomDirection();
+    blobs.push(new Blob(p.x, p.y, d.vx, d.vy, 'prey'));
+  }
+  for (let i = 0; i < CONFIG.INITIAL_PREDATORS; i++) {
+    const p = randomPosition(CONFIG.PRED_RADIUS), d = randomDirection();
+    blobs.push(new Blob(p.x, p.y, d.vx, d.vy, 'predator'));
+  }
+}
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  UPDATE — one simulation tick
+// ╚══════════════════════════════════════════════════════════════╝
+function update() {
+  // ── Dynamic Population Cap (Phase 5) ────────────────────────
+  // When total blobs exceed POP_CAP, apply a global decay multiplier
+  // to all blobs — simulating resource scarcity and preventing
+  // runaway population growth from destabilising the simulation.
+  scarcityActive = blobs.length > CONFIG.POP_CAP;
+  const decayMult = scarcityActive ? CONFIG.SCARCITY_MULTIPLIER : 1.0;
+
+  // ── 1. Think, move, decay ────────────────────────────────────
+  for (const blob of blobs) {
+    if (!blob.alive) continue;
+    blob.think();
+    blob.move();
+    blob.energy  -= blob.energyDecay * decayMult;
+    blob.fitness += CONFIG.FITNESS_SURVIVE;
+  }
+
+  // ── 2a. Prey eat food ────────────────────────────────────────
+  for (const blob of blobs) {
+    if (!blob.alive || blob.type !== 'prey') continue;
+    for (const f of food) {
+      if (distance(blob, f) < blob.radius + f.radius) {
+        blob.energy  += CONFIG.PREY_ENERGY_GAIN;
+        blob.fitness += CONFIG.FITNESS_EAT;
+        f.respawn();
+        if (blob.energy > CONFIG.BLOB_START_ENERGY * 2)
+          blob.energy = CONFIG.BLOB_START_ENERGY * 2;
+        break;
+      }
+    }
+  }
+
+  // ── 2b. Predators hunt prey ───────────────────────────────────
+  for (const pred of blobs) {
+    if (!pred.alive || pred.type !== 'predator') continue;
+    for (const prey of blobs) {
+      if (!prey.alive || prey.type !== 'prey') continue;
+      if (distance(pred, prey) < pred.radius + prey.radius) {
+        pred.energy  += CONFIG.PRED_ENERGY_GAIN;
+        pred.fitness += CONFIG.FITNESS_EAT;
+        if (pred.energy > CONFIG.BLOB_START_ENERGY * 2)
+          pred.energy = CONFIG.BLOB_START_ENERGY * 2;
+        prey.alive = false;
+        deadPool.push({ brain: cloneBrain(prey.brain), fitness: prey.fitness, type: 'prey' });
+        break;
+      }
+    }
+  }
+
+  // ── 3. Cull dead blobs → deadPool ────────────────────────────
+  const survivors = [];
+  for (const blob of blobs) {
+    if (!blob.alive) continue;
+    if (blob.energy <= 0) {
+      deadPool.push({ brain: cloneBrain(blob.brain), fitness: blob.fitness, type: blob.type });
+    } else {
+      survivors.push(blob);
+    }
+  }
+  blobs = survivors;
+
+  // Clear selection if selected blob just died
+  if (selectedBlob && !blobs.includes(selectedBlob)) selectedBlob = null;
+
+  // ── 4. Trigger evolution when all blobs die ───────────────────
+  if (blobs.length === 0 && deadPool.length > 0) evolve();
+}
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  BRAIN VIEWER (Phase 5)
+//
+//  Draws a small feed-forward diagram on the overlay canvas showing
+//  the selected blob's live neural activations.
+//
+//  Layout (left → right):
+//    Column 0: 9 input  neurons
+//    Column 1: 12 hidden neurons
+//    Column 2: 2 output neurons
+//
+//  Each neuron is a circle; fill opacity = |activation|.
+//  Positive activations → green (prey) / orange (predator).
+//  Negative activations → blue/purple.
+//  Edges are drawn for weights with |w| > EDGE_THRESHOLD to avoid clutter.
+//  Edge colour = weight sign; opacity = |weight| (clamped).
+// ╚══════════════════════════════════════════════════════════════╝
+const BV = {
+  W: 210, H: 220,      // canvas size (matches HTML attribute)
+  PAD_X: 22,
+  PAD_Y: 16,
+  R_NODE: 5,           // neuron circle radius
+  EDGE_THRESHOLD: 0.3, // only draw edges with |w| above this
+};
+
+// Input label abbreviations (9 inputs)
+const INPUT_LABELS  = ['fX','fY','E','vx','vy','prdX','prdY','pryX','pryY'];
+const OUTPUT_LABELS = ['vx\'','vy\''];
+
+function drawBrainViewer(blob) {
+  bctx.clearRect(0, 0, BV.W, BV.H);
+
+  const nI = CONFIG.NN_INPUTS;   // 9
+  const nH = CONFIG.NN_HIDDEN;   // 12
+  const nO = CONFIG.NN_OUTPUTS;  // 2
+
+  const isPred = blob.type === 'predator';
+
+  // Compute X positions for the 3 columns
+  const usableW = BV.W - BV.PAD_X * 2;
+  const colX = [
+    BV.PAD_X,
+    BV.PAD_X + usableW * 0.42,
+    BV.PAD_X + usableW,
+  ];
+
+  // Compute Y positions for each column's neurons
+  const yPositions = (n) => {
+    const usableH = BV.H - BV.PAD_Y * 2;
+    return Array.from({ length: n }, (_, i) =>
+      BV.PAD_Y + (usableH / (n - 1 || 1)) * i
+    );
+  };
+
+  const yIn  = yPositions(nI);
+  const yHid = yPositions(nH);
+  const yOut = yPositions(nO);
+
+  // ── Draw edges: input → hidden (weights1) ─────────────────
+  for (let h = 0; h < nH; h++) {
+    for (let i = 0; i < nI; i++) {
+      const w = blob.brain.weights1[h][i];
+      if (Math.abs(w) < BV.EDGE_THRESHOLD) continue;
+      const alpha = Math.min(0.55, Math.abs(w) * 0.4);
+      bctx.beginPath();
+      bctx.moveTo(colX[0], yIn[i]);
+      bctx.lineTo(colX[1], yHid[h]);
+      bctx.strokeStyle = w > 0
+        ? `rgba(61,255,143,${alpha})`    // positive → green
+        : `rgba(120,100,255,${alpha})`;  // negative → purple
+      bctx.lineWidth = 0.8;
+      bctx.stroke();
+    }
+  }
+
+  // ── Draw edges: hidden → output (weights2) ────────────────
+  for (let o = 0; o < nO; o++) {
+    for (let h = 0; h < nH; h++) {
+      const w = blob.brain.weights2[o][h];
+      if (Math.abs(w) < BV.EDGE_THRESHOLD) continue;
+      const alpha = Math.min(0.7, Math.abs(w) * 0.55);
+      bctx.beginPath();
+      bctx.moveTo(colX[1], yHid[h]);
+      bctx.lineTo(colX[2], yOut[o]);
+      bctx.strokeStyle = w > 0
+        ? `rgba(61,255,143,${alpha})`
+        : `rgba(120,100,255,${alpha})`;
+      bctx.lineWidth   = 1;
+      bctx.stroke();
+    }
+  }
+
+  // ── Draw neurons ──────────────────────────────────────────
+  // Inputs: use the actual input values from the last think() call,
+  // reconstructed from the blob's cached hidden activations indirectly.
+  // For display we just light them up proportionally to their index meaning.
+  const drawNeurons = (xs, ys, activations, labels) => {
+    for (let i = 0; i < ys.length; i++) {
+      const act   = activations ? activations[i] : 0;
+      const absA  = Math.min(1, Math.abs(act));
+      const isPos = act >= 0;
+
+      // Background circle
+      bctx.beginPath();
+      bctx.arc(xs, ys[i], BV.R_NODE, 0, Math.PI * 2);
+      bctx.fillStyle = isPos
+        ? `rgba(${isPred ? '255,80,40' : '61,255,143'},${0.15 + absA * 0.75})`
+        : `rgba(120,100,255,${0.15 + absA * 0.75})`;
+      bctx.fill();
+
+      // Border
+      bctx.strokeStyle = isPos
+        ? `rgba(${isPred ? '255,120,60' : '100,255,160'},0.7)`
+        : 'rgba(160,140,255,0.7)';
+      bctx.lineWidth   = 0.7;
+      bctx.stroke();
+
+      // Label (input column only, tiny font)
+      if (labels) {
+        bctx.fillStyle  = 'rgba(100,100,120,0.9)';
+        bctx.font       = '6px "Courier New"';
+        bctx.textAlign  = xs < BV.W / 2 ? 'right' : 'left';
+        const lx = xs < BV.W / 2
+          ? xs - BV.R_NODE - 2
+          : xs + BV.R_NODE + 2;
+        bctx.fillText(labels[i], lx, ys[i] + 2);
+      }
+    }
+  };
+
+  // For input activations we don't cache them directly, but we can
+  // reconstruct a sense of "how active" each input is from weights×hidden.
+  // Simpler: just show hidden and output activations; inputs show as dim dots.
+  drawNeurons(colX[0], yIn,  null,                    INPUT_LABELS);
+  drawNeurons(colX[1], yHid, blob._lastHidden,        null);
+  drawNeurons(colX[2], yOut, blob._lastOutputs,       OUTPUT_LABELS);
+
+  // ── Title ────────────────────────────────────────────────
+  bctx.fillStyle  = isPred ? 'rgba(255,80,60,0.7)' : 'rgba(61,255,143,0.7)';
+  bctx.font       = '7px "Courier New"';
+  bctx.textAlign  = 'center';
+  bctx.fillText(
+    `${isPred ? 'PREDATOR' : 'PREY'} BRAIN  fit:${blob.fitness.toFixed(0)}`,
+    BV.W / 2, BV.H - 4
+  );
+}
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  RENDER — draw world + brain viewer
+// ╚══════════════════════════════════════════════════════════════╝
+function render() {
+  // World
+  ctx.fillStyle = '#050508';
+  ctx.fillRect(0, 0, CONFIG.WORLD_WIDTH, CONFIG.WORLD_HEIGHT);
+
+  for (const f of food)  f.draw();
+  for (const b of blobs) if (b.type === 'prey')      b.draw();
+  for (const b of blobs) if (b.type === 'predator')  b.draw();
+
+  // Scarcity overlay — subtle red vignette when overcrowded
+  if (scarcityActive) {
+    const grad = ctx.createRadialGradient(
+      CONFIG.WORLD_WIDTH / 2, CONFIG.WORLD_HEIGHT / 2, CONFIG.WORLD_HEIGHT * 0.3,
+      CONFIG.WORLD_WIDTH / 2, CONFIG.WORLD_HEIGHT / 2, CONFIG.WORLD_HEIGHT * 0.8
+    );
+    grad.addColorStop(0, 'rgba(255,30,0,0)');
+    grad.addColorStop(1, 'rgba(255,30,0,0.08)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, CONFIG.WORLD_WIDTH, CONFIG.WORLD_HEIGHT);
+  }
+
+  // Generation banner
+  if (flashTimer > 0) {
+    const alpha = Math.min(1, flashTimer / 30);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font        = '11px "Courier New"';
+    ctx.fillStyle   = '#3dff8f';
+    ctx.textAlign   = 'center';
+    ctx.fillText(`— GENERATION ${generation} —`, CONFIG.WORLD_WIDTH / 2, CONFIG.WORLD_HEIGHT / 2);
+    ctx.restore();
+    flashTimer--;
+  }
+
+  // Brain viewer
+  if (selectedBlob && blobs.includes(selectedBlob)) {
+    brainCvs.style.display = 'block';
+    drawBrainViewer(selectedBlob);
+  } else {
+    brainCvs.style.display = 'none';
+    selectedBlob = null;
+  }
+
+  // HUD
+  const preyCount  = blobs.filter(b => b.type === 'prey').length;
+  const predCount  = blobs.filter(b => b.type === 'predator').length;
+  const totalCount = preyCount + predCount;
+  document.getElementById('hud-gen').textContent      = generation;
+  document.getElementById('hud-prey').textContent     = preyCount;
+  document.getElementById('hud-pred').textContent     = predCount;
+  document.getElementById('hud-total').textContent    = totalCount;
+  document.getElementById('hud-food').textContent     = food.length;
+  document.getElementById('hud-best').textContent     =
+    `${allTimeBestPrey.toFixed(0)} / ${allTimeBestPred.toFixed(0)}`;
+  document.getElementById('hud-frame').textContent    = frame;
+
+  const scarcEl = document.getElementById('hud-scarcity');
+  scarcEl.textContent = scarcityActive ? 'ON ⚠' : 'OFF';
+  scarcEl.style.color = scarcityActive ? '#ff4422' : '#ff9944';
+}
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  CLICK → BLOB SELECTION
+// ╚══════════════════════════════════════════════════════════════╝
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx   = e.clientX - rect.left;
+  const my   = e.clientY - rect.top;
+
+  // Find closest blob within click radius
+  let picked = null;
+  let best   = Infinity;
+  const PICK_RADIUS = 18;  // generous hitbox
+
+  for (const blob of blobs) {
+    const d = Math.sqrt((blob.x - mx) ** 2 + (blob.y - my) ** 2);
+    if (d < PICK_RADIUS + blob.radius && d < best) {
+      best   = d;
+      picked = blob;
+    }
+  }
+
+  // Toggle: clicking the same blob again or clicking empty space deselects
+  selectedBlob = (picked === selectedBlob) ? null : picked;
+});
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  TURBO / SKIP CONTROLS
+// ╚══════════════════════════════════════════════════════════════╝
+function skipGeneration() {
+  for (const blob of blobs)
+    deadPool.push({ brain: cloneBrain(blob.brain), fitness: blob.fitness, type: blob.type });
+  blobs.length = 0;
+  evolve();
+}
+
+function setTurbo(n) {
+  turboMultiplier = n;
+  document.querySelectorAll('.ctrl-btn[data-turbo]').forEach(btn =>
+    btn.classList.toggle('active', parseInt(btn.dataset.turbo) === n)
+  );
+}
+
+document.getElementById('btn-skip').addEventListener('click', skipGeneration);
+
+['2', '5', '20'].forEach(x => {
+  const btn = document.getElementById(`btn-turbo-${x}x`);
+  btn.addEventListener('click', () =>
+    setTurbo(turboMultiplier === parseInt(x) ? 1 : parseInt(x))
+  );
+});
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  MAIN LOOP
+// ╚══════════════════════════════════════════════════════════════╝
+function loop() {
+  for (let t = 0; t < turboMultiplier; t++) {
+    update();
+    frame++;
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+
+
+// ╔══════════════════════════════════════════════════════════════╗
+//  ENTRY POINT
+// ╚══════════════════════════════════════════════════════════════╝
+initWorld();
+loop();
+</script>
+</body>
+</html>
