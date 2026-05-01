@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neuro Evolution Simulator</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        
+        h1 {
+            color: #00ff00;
+            margin-bottom: 20px;
+        }
+        
+        canvas {
+            border: 2px solid #00ff00;
+            background-color: #000000;
+            margin: 20px 0;
+            display: block;
+        }
+        
+        .controls {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #2a2a2a;
+            border-radius: 5px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        button {
+            padding: 10px 20px;
+            background-color: #00ff00;
+            color: #000000;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.3s;
+        }
+        
+        button:hover {
+            background-color: #00cc00;
+        }
+        
+        button:active {
+            background-color: #009900;
+        }
+        
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #2a2a2a;
+            border-radius: 5px;
+            max-width: 600px;
+            text-align: center;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        
+        .stat {
+            padding: 10px;
+            background-color: #1a1a1a;
+            border-left: 3px solid #00ff00;
+        }
+        
+        .stat-label {
+            font-size: 0.9em;
+            color: #888888;
+        }
+        
+        .stat-value {
+            font-size: 1.5em;
+            color: #00ff00;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧠 Neuro Evolution Simulator</h1>
+    
+    <div class="controls">
+        <button id="startBtn">Start Simulation</button>
+        <button id="pauseBtn">Pause</button>
+        <button id="resetBtn">Reset</button>
+        <button id="speedUpBtn">Speed +</button>
+        <button id="speedDownBtn">Speed -</button>
+    </div>
+    
+    <canvas id="canvas" width="800" height="600"></canvas>
+    
+    <div class="info">
+        <h2>Simulation Stats</h2>
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-label">Generation</div>
+                <div class="stat-value" id="generation">0</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Creatures</div>
+                <div class="stat-value" id="creatures">0</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Food</div>
+                <div class="stat-value" id="food">0</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Avg Energy</div>
+                <div class="stat-value" id="avgEnergy">0</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        let simulation = null;
+        let isRunning = false;
+        let simulationSpeed = 1;
+        
+        class Creature {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.energy = 100;
+                this.size = 5;
+                this.age = 0;
+                this.rotation = Math.random() * Math.PI * 2;
+                
+                // Neural network weights (simple)
+                this.weights = {
+                    leftSensor: Math.random() - 0.5,
+                    rightSensor: Math.random() - 0.5,
+                    bias: Math.random() - 0.5
+                };
+            }
+            
+            update(foodList) {
+                // Decrease energy
+                this.energy -= 0.2;
+                this.age++;
+                
+                // Simple neural network: sense food and move
+                let nearestFood = this.findNearestFood(foodList);
+                
+                if (nearestFood) {
+                    let dx = nearestFood.x - this.x;
+                    let dy = nearestFood.y - this.y;
+                    let distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    // Calculate sensors
+                    let angle = Math.atan2(dy, dx);
+                    let angleDiff = angle - this.rotation;
+                    
+                    // Normalize angle
+                    while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+                    while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+                    
+                    // Neural activation
+                    let leftInput = Math.cos(angleDiff + 0.3);
+                    let rightInput = Math.cos(angleDiff - 0.3);
+                    
+                    let leftOutput = Math.tanh(leftInput * this.weights.leftSensor + this.weights.bias);
+                    let rightOutput = Math.tanh(rightInput * this.weights.rightSensor + this.weights.bias);
+                    
+                    this.vx = leftOutput * 1.5;
+                    this.vy = rightOutput * 1.5;
+                    this.rotation = angle;
+                } else {
+                    this.vx *= 0.98;
+                    this.vy *= 0.98;
+                }
+                
+                // Update position
+                this.x += this.vx;
+                this.y += this.vy;
+                
+                // Wrap around
+                if (this.x < 0) this.x = canvas.width;
+                if (this.x > canvas.width) this.x = 0;
+                if (this.y < 0) this.y = canvas.height;
+                if (this.y > canvas.height) this.y = 0;
+                
+                // Check food collision
+                for (let i = 0; i < foodList.length; i++) {
+                    let dx = this.x - foodList[i].x;
+                    let dy = this.y - foodList[i].y;
+                    let distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < this.size + foodList[i].size) {
+                        this.energy += 50;
+                        foodList.splice(i, 1);
+                        break;
+                    }
+                }
+            }
+            
+            findNearestFood(foodList) {
+                let nearest = null;
+                let minDistance = Infinity;
+                
+                for (let food of foodList) {
+                    let dx = food.x - this.x;
+                    let dy = food.y - this.y;
+                    let distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < minDistance && distance < 200) {
+                        minDistance = distance;
+                        nearest = food;
+                    }
+                }
+                
+                return nearest;
+            }
+            
+            draw() {
+                // Draw creature
+                ctx.fillStyle = `hsl(${this.energy * 1.2}, 100%, 50%)`;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Draw direction indicator
+                ctx.strokeStyle = ctx.fillStyle;
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(
+                    this.x + Math.cos(this.rotation) * this.size * 2,
+                    this.y + Math.sin(this.rotation) * this.size * 2
+                );
+                ctx.stroke();
+            }
+            
+            reproduce() {
+                let child = new Creature(this.x + (Math.random() - 0.5) * 20, this.y + (Math.random() - 0.5) * 20);
+                
+                // Inherit and mutate weights
+                child.weights.leftSensor = this.weights.leftSensor + (Math.random() - 0.5) * 0.2;
+                child.weights.rightSensor = this.weights.rightSensor + (Math.random() - 0.5) * 0.2;
+                child.weights.bias = this.weights.bias + (Math.random() - 0.5) * 0.2;
+                
+                child.energy = 50;
+                return child;
+            }
+            
+            isAlive() {
+                return this.energy > 0;
+            }
+        }
+        
+        class Food {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.size = 3;
+            }
+            
+            draw() {
+                ctx.fillStyle = '#ffff00';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        class Simulation {
+            constructor() {
+                this.creatures = [];
+                this.food = [];
+                this.generation = 0;
+                
+                // Initialize
+                for (let i = 0; i < 30; i++) {
+                    this.creatures.push(new Creature(Math.random() * canvas.width, Math.random() * canvas.height));
+                }
+                
+                for (let i = 0; i < 50; i++) {
+                    this.food.push(new Food());
+                }
+            }
+            
+            update() {
+                // Update creatures
+                for (let creature of this.creatures) {
+                    creature.update(this.food);
+                }
+                
+                // Remove dead creatures
+                this.creatures = this.creatures.filter(c => c.isAlive());
+                
+                // Reproduction
+                let newCreatures = [];
+                for (let creature of this.creatures) {
+                    if (creature.energy > 150) {
+                        newCreatures.push(creature.reproduce());
+                        creature.energy -= 50;
+                    }
+                }
+                this.creatures.push(...newCreatures);
+                
+                // Add food
+                if (this.food.length < 100) {
+                    this.food.push(new Food());
+                }
+                
+                // Track generation
+                this.generation++;
+            }
+            
+            draw() {
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                for (let food of this.food) {
+                    food.draw();
+                }
+                
+                for (let creature of this.creatures) {
+                    creature.draw();
+                }
+            }
+            
+            getStats() {
+                let avgEnergy = this.creatures.length > 0 
+                    ? (this.creatures.reduce((sum, c) => sum + c.energy, 0) / this.creatures.length).toFixed(1)
+                    : 0;
+                
+                return {
+                    generation: this.generation,
+                    creatures: this.creatures.length,
+                    food: this.food.length,
+                    avgEnergy: avgEnergy
+                };
+            }
+        }
+        
+        function animate() {
+            if (isRunning && simulation) {
+                for (let i = 0; i < simulationSpeed; i++) {
+                    simulation.update();
+                }
+                
+                let stats = simulation.getStats();
+                document.getElementById('generation').textContent = stats.generation;
+                document.getElementById('creatures').textContent = stats.creatures;
+                document.getElementById('food').textContent = stats.food;
+                document.getElementById('avgEnergy').textContent = stats.avgEnergy;
+            }
+            
+            if (simulation) {
+                simulation.draw();
+            }
+            
+            requestAnimationFrame(animate);
+        }
+        
+        // Button event listeners
+        document.getElementById('startBtn').addEventListener('click', () => {
+            if (!simulation) {
+                simulation = new Simulation();
+            }
+            isRunning = true;
+            animate();
+        });
+        
+        document.getElementById('pauseBtn').addEventListener('click', () => {
+            isRunning = false;
+        });
+        
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            isRunning = false;
+            simulation = new Simulation();
+            simulation.draw();
+            document.getElementById('generation').textContent = '0';
+            document.getElementById('creatures').textContent = '0';
+            document.getElementById('food').textContent = '0';
+            document.getElementById('avgEnergy').textContent = '0';
+        });
+        
+        document.getElementById('speedUpBtn').addEventListener('click', () => {
+            simulationSpeed = Math.min(simulationSpeed + 1, 10);
+        });
+        
+        document.getElementById('speedDownBtn').addEventListener('click', () => {
+            simulationSpeed = Math.max(simulationSpeed - 1, 1);
+        });
+        
+        // Initial draw
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    </script>
+</body>
+</html>
